@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { activityLog, agents, companies, createDb, issueComments, issueWorkProducts, issues } from "@paperclipai/db";
 import { and, eq } from "drizzle-orm";
 import {
+  canonicalPullRequestUrl,
   chooseOwningTask,
   copyReviewStages,
   feedbackMarker,
@@ -192,6 +193,12 @@ describe("github pr feedback: rendering and ownership", () => {
     expect(chooseOwningTask([])).toBeNull();
   });
 
+  it("compares pull request URLs by repository and number only", () => {
+    expect(canonicalPullRequestUrl("https://github.com/Acme/Widgets/pull/42/?x=1#discussion")).toBe("https://github.com/acme/widgets/pull/42");
+    expect(canonicalPullRequestUrl(null)).toBe("");
+    expect(canonicalPullRequestUrl("  ")).toBe("");
+  });
+
   it("copies the closed task's agent review stages for its follow-up, and nothing a person must clear", () => {
     const r1 = randomUUID();
     const policy = copyReviewStages({
@@ -275,6 +282,13 @@ describeEmbeddedPostgres("github pr feedback: handleDelivery against a database"
       title: "x", url: "https://github.com/acme/other/pull/42", status: "active", isPrimary: true,
       createdAt: new Date(Date.now() - 86_400_000),
     });
+    // Same number and no URL: it names no repository, so it is never chosen.
+    const [urlless] = await db.insert(issues).values({ companyId, title: "No URL", status: "in_progress", priority: "low", assigneeAgentId: reviewer!.id }).returning();
+    await db.insert(issueWorkProducts).values({
+      companyId, issueId: urlless!.id, type: "pull_request", provider: "github", externalId: "42",
+      title: "y", url: null, status: "active", isPrimary: true,
+      createdAt: new Date(Date.now() - 86_400_000),
+    });
     const policy = { mode: "normal", commentRequired: true, stages: [{ id: randomUUID(), type: "review", approvalsNeeded: 1, participants: [{ id: randomUUID(), type: "agent", agentId: reviewer!.id }] }] };
     const [owner] = await db.insert(issues).values({
       companyId, title: "Make the widget spin", status, priority: "high",
@@ -296,7 +310,7 @@ describeEmbeddedPostgres("github pr feedback: handleDelivery against a database"
       const raw = Buffer.from(JSON.stringify(payload));
       return svc.handleDelivery({ companyId, event, signature: sign(raw.toString("utf8"), secret), rawBody: raw });
     };
-    return { companyId, builder: builder!, reviewer: reviewer!, owner: owner!, foreign: foreign!, wakeup, deliver, svc };
+    return { companyId, builder: builder!, reviewer: reviewer!, owner: owner!, foreign: foreign!, urlless: urlless!, wakeup, deliver, svc };
   }
 
   const commentsOn = (issueId: string) => db.select().from(issueComments).where(eq(issueComments.issueId, issueId));
@@ -313,6 +327,7 @@ describeEmbeddedPostgres("github pr feedback: handleDelivery against a database"
     expect(comments[0]!.authorType).toBe("system");
     expect(w.wakeup).toHaveBeenCalledWith(w.builder.id, expect.objectContaining({ reason: "issue_commented", payload: expect.objectContaining({ issueId: w.owner.id }) }));
     expect(await commentsOn(w.foreign.id)).toHaveLength(0);
+    expect(await commentsOn(w.urlless.id)).toHaveLength(0);
     const activity = await activityOn(w.owner.id);
     expect(activity).toHaveLength(1);
     expect(activity[0]).toMatchObject({ action: "issue.comment_added", actorType: "system", actorId: "github-pr-feedback", details: expect.objectContaining({ commentId: comments[0]!.id, pullRequest: `${REPO}#42` }) });

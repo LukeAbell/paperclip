@@ -346,6 +346,11 @@ export function owningAgentId(row: {
   return returnAgent ?? row.assigneeAgentId;
 }
 
+/** A pull request URL for comparison: lowercase, without query, fragment or trailing slash. */
+export function canonicalPullRequestUrl(value: string | null | undefined): string {
+  return (value ?? "").trim().toLowerCase().replace(/[?#].*$/, "").replace(/\/+$/, "");
+}
+
 type Candidate = { issueId: string; parentId: string | null; status: string; isPrimary: boolean; createdAt: Date };
 
 /**
@@ -437,11 +442,11 @@ export function githubPrFeedbackService(
           ),
         ),
       );
-    // externalId alone is only a number; the URL is what names the repository.
+    // externalId alone is only a number; the URL is what names the repository,
+    // so a work product without the same URL is never a candidate.
     const byIssue = new Map<string, Candidate>();
     for (const row of rows) {
-      const rowUrl = (row.url ?? "").toLowerCase().replace(/\/+$/, "");
-      if (rowUrl && rowUrl !== url) continue;
+      if (canonicalPullRequestUrl(row.url) !== url) continue;
       const prev = byIssue.get(row.issueId);
       const next = {
         issueId: row.issueId,
