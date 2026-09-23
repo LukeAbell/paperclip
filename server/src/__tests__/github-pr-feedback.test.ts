@@ -397,6 +397,28 @@ describeEmbeddedPostgres("github pr feedback: handleDelivery against a database"
     expect(await db.select().from(issues).where(eq(issues.parentId, w.owner.id))).toHaveLength(2);
   });
 
+  it("does not re-file a redelivered item whose follow-up has since closed", async () => {
+    const w = await world("done");
+    const first = (await w.deliver("issue_comment", issueCommentEvent({}))) as { followUpIssueId: string };
+    await db.update(issues).set({ status: "done" }).where(eq(issues.id, first.followUpIssueId));
+    w.wakeup.mockClear();
+    expect(await w.deliver("issue_comment", issueCommentEvent({}))).toMatchObject({ status: "duplicate", issueId: first.followUpIssueId });
+    expect(await db.select().from(issues).where(eq(issues.parentId, w.owner.id))).toHaveLength(1);
+    expect(await commentsOn(first.followUpIssueId)).toHaveLength(1);
+    expect(w.wakeup).not.toHaveBeenCalled();
+  });
+
+  it("does not file a follow-up for a redelivered item that reached the task before it closed", async () => {
+    const w = await world("in_progress");
+    const payload = reviewEvent({ body: "Rename it." });
+    expect(await w.deliver("pull_request_review", payload)).toMatchObject({ status: "relayed", issueId: w.owner.id });
+    await db.update(issues).set({ status: "done" }).where(eq(issues.id, w.owner.id));
+    w.wakeup.mockClear();
+    expect(await w.deliver("pull_request_review", payload)).toMatchObject({ status: "duplicate", issueId: w.owner.id });
+    expect(await db.select().from(issues).where(eq(issues.parentId, w.owner.id))).toHaveLength(0);
+    expect(w.wakeup).not.toHaveBeenCalled();
+  });
+
   it("refuses an unsigned or wrongly signed delivery before reading it, and is inert for a company that has not enabled it", async () => {
     const w = await world("in_progress");
     expect(await w.deliver("pull_request_review", reviewEvent({}), "wrong")).toEqual({ status: "unauthorized" });

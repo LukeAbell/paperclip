@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { and, eq, like, notInArray, or, sql } from "drizzle-orm";
+import { and, eq, inArray, like, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agents, issueComments, issueWorkProducts, issues } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
@@ -542,32 +542,55 @@ export function githubPrFeedbackService(
     }
   }
 
-  /** Find the open follow-up this pull request already has under the closed task, or file one. */
-  async function followUp(parent: NonNullable<Awaited<ReturnType<typeof issuesSvc.getById>>>, item: GithubPrFeedbackItem, ownerId: string | null) {
+  /**
+   * Where feedback for a closed task goes: nowhere if this item was already
+   * relayed, else the open follow-up this pull request has under the task, else
+   * a new one.
+   */
+  async function followUp(
+    parent: NonNullable<Awaited<ReturnType<typeof issuesSvc.getById>>>,
+    item: GithubPrFeedbackItem,
+    ownerId: string | null,
+  ): Promise<{ issue: Awaited<ReturnType<typeof issuesSvc.getById>>; created: boolean; relayedCommentId?: string }> {
     const originId = `${item.repo.toLowerCase()}#${item.prNumber}`;
-    const sameOrigin = and(
-      eq(issues.companyId, parent.companyId),
-      eq(issues.parentId, parent.id),
-      eq(issues.originKind, GITHUB_PR_FEEDBACK_ORIGIN_KIND),
-      eq(issues.originId, originId),
-    );
-    const open = await db
-      .select({ id: issues.id })
+    const earlier = await db
+      .select({ id: issues.id, status: issues.status })
       .from(issues)
-      .where(and(sameOrigin, notInArray(issues.status, [...CLOSED_STATUSES])))
+      .where(
+        and(
+          eq(issues.companyId, parent.companyId),
+          eq(issues.parentId, parent.id),
+          eq(issues.originKind, GITHUB_PR_FEEDBACK_ORIGIN_KIND),
+          eq(issues.originId, originId),
+        ),
+      );
+
+    // A redelivered item may already sit on the task itself (it was open then)
+    // or on an earlier follow-up that has since closed. Relaying it again would
+    // file a new follow-up for feedback the builder already had.
+    const relayed = await db
+      .select({ issueId: issueComments.issueId, id: issueComments.id })
+      .from(issueComments)
+      .where(
+        and(
+          inArray(issueComments.issueId, [parent.id, ...earlier.map((row) => row.id)]),
+          like(issueComments.body, `%${escapeLikePattern(feedbackMarker(item))}%`),
+        ),
+      )
       .limit(1)
       .then((rows) => rows[0] ?? null);
+    if (relayed) {
+      return { issue: await issuesSvc.getById(relayed.issueId), created: false, relayedCommentId: relayed.id };
+    }
+
+    const open = earlier.find((row) => !CLOSED_STATUSES.includes(row.status as (typeof CLOSED_STATUSES)[number]));
     if (open) return { issue: await issuesSvc.getById(open.id), created: false };
 
     // The idempotency key names the parent, the pull request and how many
     // follow-ups it has had, never the delivery. Issue creation serializes on
     // that key, so distinct feedback arriving together files one follow-up, and
     // feedback after that follow-up closes files the next one.
-    const generation = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(issues)
-      .where(sameOrigin)
-      .then((rows) => rows[0]?.count ?? 0);
+    const generation = earlier.length;
     let deduplicated = false;
     const { issue } = await issuesSvc.createChild(parent.id, {
       title: `Address GitHub feedback on ${item.repo}#${item.prNumber} (follow-up to ${parent.identifier ?? "closed task"})`,
@@ -670,6 +693,14 @@ export function githubPrFeedbackService(
       if (CLOSED_STATUSES.includes(row.status as (typeof CLOSED_STATUSES)[number])) {
         const made = await followUp(row, item, ownerId);
         if (!made.issue) return { status: "ignored", reason: "follow_up_unavailable" };
+        if (made.relayedCommentId) {
+          return {
+            status: "duplicate",
+            issueId: made.issue.id,
+            commentId: made.relayedCommentId,
+            ...(made.issue.id !== row.id ? { followUpIssueId: made.issue.id } : {}),
+          };
+        }
         target = made.issue;
         followUpIssueId = made.issue.id;
       }

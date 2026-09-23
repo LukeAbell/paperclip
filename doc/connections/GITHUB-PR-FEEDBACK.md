@@ -54,7 +54,10 @@ broken with a zero-width space, so quoted text never mentions an agent.
    same pull request joins that follow-up while it is open.
 
 A redelivery is a no-op: each comment carries a marker that is checked under the
-task's row lock before anything is written. Each comment and each follow-up task
+task's row lock before anything is written. For a closed task the marker is also
+checked on the task and on every follow-up it has had for that pull request, so
+an item that was already relayed does not file a new follow-up. Deliveries that
+arrive together for a closed task share one follow-up. Each comment and each follow-up task
 is recorded in the activity log with the system actor `github-pr-feedback`.
 
 Nothing is written to GitHub. The woken agent answers on the pull request.
