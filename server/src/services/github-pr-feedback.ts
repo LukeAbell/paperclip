@@ -545,22 +545,30 @@ export function githubPrFeedbackService(
   /** Find the open follow-up this pull request already has under the closed task, or file one. */
   async function followUp(parent: NonNullable<Awaited<ReturnType<typeof issuesSvc.getById>>>, item: GithubPrFeedbackItem, ownerId: string | null) {
     const originId = `${item.repo.toLowerCase()}#${item.prNumber}`;
+    const sameOrigin = and(
+      eq(issues.companyId, parent.companyId),
+      eq(issues.parentId, parent.id),
+      eq(issues.originKind, GITHUB_PR_FEEDBACK_ORIGIN_KIND),
+      eq(issues.originId, originId),
+    );
     const open = await db
       .select({ id: issues.id })
       .from(issues)
-      .where(
-        and(
-          eq(issues.companyId, parent.companyId),
-          eq(issues.parentId, parent.id),
-          eq(issues.originKind, GITHUB_PR_FEEDBACK_ORIGIN_KIND),
-          eq(issues.originId, originId),
-          notInArray(issues.status, [...CLOSED_STATUSES]),
-        ),
-      )
+      .where(and(sameOrigin, notInArray(issues.status, [...CLOSED_STATUSES])))
       .limit(1)
       .then((rows) => rows[0] ?? null);
     if (open) return { issue: await issuesSvc.getById(open.id), created: false };
 
+    // The idempotency key names the parent, the pull request and how many
+    // follow-ups it has had, never the delivery. Issue creation serializes on
+    // that key, so distinct feedback arriving together files one follow-up, and
+    // feedback after that follow-up closes files the next one.
+    const generation = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(issues)
+      .where(sameOrigin)
+      .then((rows) => rows[0]?.count ?? 0);
+    let deduplicated = false;
     const { issue } = await issuesSvc.createChild(parent.id, {
       title: `Address GitHub feedback on ${item.repo}#${item.prNumber} (follow-up to ${parent.identifier ?? "closed task"})`,
       description: renderFollowUpDescription(item, { identifier: parent.identifier ?? null, status: parent.status }),
@@ -571,8 +579,12 @@ export function githubPrFeedbackService(
       originKind: GITHUB_PR_FEEDBACK_ORIGIN_KIND,
       originId,
       executionPolicy: copyReviewStages(parent.executionPolicy) as typeof issues.$inferInsert.executionPolicy,
-      idempotencyKey: `github-pr-feedback:${originId}:${item.key}`,
+      idempotencyKey: `github-pr-feedback:${parent.id}:${originId}:${generation}`,
+      onDeduplicated: () => {
+        deduplicated = true;
+      },
     });
+    if (deduplicated) return { issue, created: false };
     try {
       await workProducts.createForIssue(issue.id, parent.companyId, {
         projectId: issue.projectId ?? parent.projectId ?? null,

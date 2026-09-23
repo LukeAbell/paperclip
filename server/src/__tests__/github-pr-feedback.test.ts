@@ -370,6 +370,33 @@ describeEmbeddedPostgres("github pr feedback: handleDelivery against a database"
     expect(children).toHaveLength(1);
   });
 
+  it("files one follow-up when distinct feedback on a done task arrives at the same time", async () => {
+    const w = await world("done");
+    const results = await Promise.all([
+      w.deliver("pull_request_review", reviewEvent({ body: "Not yet." })),
+      w.deliver("issue_comment", issueCommentEvent({})),
+      w.deliver("pull_request_review_comment", reviewCommentEvent({})),
+    ]);
+    expect(results.map((r) => r.status)).toEqual(["relayed", "relayed", "relayed"]);
+    const children = await db.select().from(issues).where(eq(issues.parentId, w.owner.id));
+    expect(children).toHaveLength(1);
+    const followUpId = children[0]!.id;
+    expect(results.map((r) => (r as { issueId?: string }).issueId)).toEqual([followUpId, followUpId, followUpId]);
+    expect(await commentsOn(followUpId)).toHaveLength(3);
+    expect(await db.select().from(issueWorkProducts).where(eq(issueWorkProducts.issueId, followUpId))).toHaveLength(1);
+    expect((await activityOn(followUpId)).filter((a) => a.action === "issue.created")).toHaveLength(1);
+  });
+
+  it("files a fresh follow-up once the previous one is closed", async () => {
+    const w = await world("done");
+    const first = (await w.deliver("pull_request_review", reviewEvent({ body: "Not yet." }))) as { followUpIssueId: string };
+    await db.update(issues).set({ status: "done" }).where(eq(issues.id, first.followUpIssueId));
+    const second = (await w.deliver("issue_comment", issueCommentEvent({}))) as { followUpIssueId: string };
+    expect(second.followUpIssueId).toBeTruthy();
+    expect(second.followUpIssueId).not.toBe(first.followUpIssueId);
+    expect(await db.select().from(issues).where(eq(issues.parentId, w.owner.id))).toHaveLength(2);
+  });
+
   it("refuses an unsigned or wrongly signed delivery before reading it, and is inert for a company that has not enabled it", async () => {
     const w = await world("in_progress");
     expect(await w.deliver("pull_request_review", reviewEvent({}), "wrong")).toEqual({ status: "unauthorized" });
