@@ -759,6 +759,14 @@ describe("deterministic remote process-session wrapper shutdown (PAP-5316)", () 
   // still leaves the peer's entry untouched under this preload proves the
   // fix for every less-adversarial timing too. It never runs unless a test
   // opts in, and it never touches this test file's own process.
+  //
+  // With PAPERCLIP_TEST_PROBE_SWAP_FORGE_CTIME=1 the swapped entry also reads
+  // back with the wrapper's own probe ctimeMs. That is what a kernel whose
+  // file timestamp clock is coarser than the swap produces: both creates land
+  // in one clock tick. On a filesystem that hands the freed inode number
+  // straight to the peer's create (ext4 does, every time), (dev, ino, ctimeMs)
+  // then matches the peer's entry. Only a wrapper that keeps its own inode
+  // allocated until the removal decision can tell them apart.
   let probeSwapPreloadDir: string | null = null;
   afterAll(async () => {
     if (probeSwapPreloadDir) await rm(probeSwapPreloadDir, { recursive: true, force: true }).catch(() => undefined);
@@ -778,6 +786,7 @@ describe("deterministic remote process-session wrapper shutdown (PAP-5316)", () 
             `const mode = process.env.PAPERCLIP_TEST_PROBE_SWAP_MODE;`,
             `const seq = process.env.PAPERCLIP_TEST_PROBE_SWAP_SEQ;`,
             `const symlinkTarget = process.env.PAPERCLIP_TEST_PROBE_SWAP_SYMLINK_TARGET;`,
+            `const forgeCtime = process.env.PAPERCLIP_TEST_PROBE_SWAP_FORGE_CTIME === "1";`,
             `if (mode && seq) {`,
             `  const expectedName = ".paperclip-birthtime-probe-" + process.pid + "-" + seq;`,
             `  let swapped = false;`,
@@ -785,10 +794,17 @@ describe("deterministic remote process-session wrapper shutdown (PAP-5316)", () 
             `  fs.promises.lstat = async (candidatePath, opts) => {`,
             `    if (!swapped && path.basename(String(candidatePath)) === expectedName) {`,
             `      swapped = true;`,
+            `      let ownCtimeMs = null;`,
+            `      try { ownCtimeMs = fs.lstatSync(candidatePath).ctimeMs; } catch {}`,
             `      try { fs.unlinkSync(candidatePath); } catch {}`,
             `      if (mode === "file") fs.writeFileSync(candidatePath, "peer-owned-content");`,
             `      else if (mode === "dir") fs.mkdirSync(candidatePath);`,
             `      else if (mode === "symlink") fs.symlinkSync(symlinkTarget, candidatePath);`,
+            `      if (forgeCtime && ownCtimeMs !== null) {`,
+            `        const stats = await originalLstat(candidatePath, opts);`,
+            `        stats.ctimeMs = ownCtimeMs;`,
+            `        return stats;`,
+            `      }`,
             `    }`,
             `    return originalLstat(candidatePath, opts);`,
             `  };`,
@@ -873,7 +889,7 @@ describe("deterministic remote process-session wrapper shutdown (PAP-5316)", () 
     // Makes the wrapper's own process observe a same-sandbox peer replacing
     // its birth-time probe file, through the preload above (PAP-5355). seq 1
     // is sessionDir's probe (the first one captureSessionIdentity() runs).
-    probeSwap?: { seq: 1 | 2; mode: "file" | "dir" | "symlink"; symlinkTarget?: string };
+    probeSwap?: { seq: 1 | 2; mode: "file" | "dir" | "symlink"; symlinkTarget?: string; forgeCtime?: boolean };
     // Makes the wrapper's own process observe an fstat() failure on the open
     // descriptor for its own birth-time probe file, through the preload above
     // (PAP-5374). seq 1 is sessionDir's probe (the first one
@@ -911,6 +927,7 @@ describe("deterministic remote process-session wrapper shutdown (PAP-5316)", () 
       env.PAPERCLIP_TEST_PROBE_SWAP_SEQ = String(options.probeSwap.seq);
       env.PAPERCLIP_TEST_PROBE_SWAP_MODE = options.probeSwap.mode;
       if (options.probeSwap.symlinkTarget) env.PAPERCLIP_TEST_PROBE_SWAP_SYMLINK_TARGET = options.probeSwap.symlinkTarget;
+      if (options.probeSwap.forgeCtime) env.PAPERCLIP_TEST_PROBE_SWAP_FORGE_CTIME = "1";
       execArgv.push("--require", await getProbeSwapPreloadPath());
     }
     if (options?.fstatFailure) {
@@ -2048,7 +2065,7 @@ describe("deterministic remote process-session wrapper shutdown (PAP-5316)", () 
       outputToStdout: false,
       command: process.execPath,
       args: [childPath],
-      probeSwap: { seq: 1, mode: "file" },
+      probeSwap: { seq: 1, mode: "file", forgeCtime: true },
     });
     await waitForTrackedChildPid(pidFile);
 
@@ -2097,7 +2114,7 @@ describe("deterministic remote process-session wrapper shutdown (PAP-5316)", () 
       outputToStdout: false,
       command: process.execPath,
       args: [childPath],
-      probeSwap: { seq: 1, mode: "symlink", symlinkTarget: linkTarget },
+      probeSwap: { seq: 1, mode: "symlink", symlinkTarget: linkTarget, forgeCtime: true },
     });
     await waitForTrackedChildPid(pidFile);
 
