@@ -1,10 +1,9 @@
 import { agentAppearanceSchema } from "../agent-appearance.js";
-import { aiConnectionBindingSchema } from "../ai-connections.js";
+import { aiRuntimeConnectionBindingSchema as aiConnectionBindingSchema } from "../ai-connection-router.js";
 import { z } from "zod";
 import {
   AGENT_ICON_NAMES,
   AGENT_ROLES,
-  AGENT_STATUSES,
   INBOX_MINE_ISSUE_STATUS_FILTER,
 } from "../constants.js";
 import { agentAdapterTypeSchema } from "../adapter-type.js";
@@ -12,6 +11,12 @@ import { envConfigSchema } from "./secret.js";
 import { trustAuthorizationPolicySchema, trustPresetSchema } from "./trust-policy.js";
 import { agentDesiredSkillSelectionSchema } from "./adapter-skills.js";
 import { objectWithoutDefaults } from "./partial.js";
+
+export const agentToolsUseScopeSchema = z.object({
+  providerTypes: z.array(z.string().trim().min(1).max(160)).min(1).max(100),
+}).strict();
+
+export type AgentToolsUseScope = z.infer<typeof agentToolsUseScopeSchema>;
 
 export const agentPermissionsSchema = z.object({
   // No schema default: the server derives the default (enabled unless the
@@ -34,10 +39,18 @@ export const updateAgentInstructionsBundleSchema = z.object({
 export type UpdateAgentInstructionsBundle = z.infer<typeof updateAgentInstructionsBundleSchema>;
 
 export const upsertAgentInstructionsFileSchema = z.object({
-  path: z.string().trim().min(1),
-  content: z.string(),
+  path: z.string().min(1).max(512),
+  content: z.string().max(1024 * 1024),
+  baseRevisionId: z.string().uuid().nullable().optional(),
+  baseHash: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
   clearLegacyPromptTemplate: z.boolean().optional().default(false),
-});
+}).strict();
+
+export const restoreAgentInstructionSchema = z.object({
+  path: z.string().min(1).max(512),
+  revisionId: z.string().uuid(),
+  baseRevisionId: z.string().uuid(),
+}).strict();
 
 export type UpsertAgentInstructionsFile = z.infer<typeof upsertAgentInstructionsFileSchema>;
 
@@ -86,12 +99,16 @@ export const createAgentSchema = z.object({
   capabilities: z.string().optional().nullable(),
   desiredSkills: z.array(agentDesiredSkillSelectionSchema).optional(),
   adapterType: agentAdapterTypeSchema,
+  runner: z.enum(["auto", "paperclip", "legacy"]).optional(),
   adapterConfig: adapterConfigSchema.optional().default({}),
   instructionsBundle: createAgentInstructionsBundleSchema.optional(),
   runtimeConfig: agentRuntimeConfigSchema.optional().default({}),
   defaultEnvironmentId: z.string().guid().optional().nullable(),
   budgetMonthlyCents: z.number().int().nonnegative().optional().default(0),
   permissions: agentPermissionsSchema.optional(),
+  // Optional scope for the new agent's default tools:use grant. Omitted and
+  // null retain the existing unrestricted (null-scope) default.
+  toolsUseScope: agentToolsUseScopeSchema.nullable().optional(),
   metadata: z.record(z.string(), z.unknown()).optional().nullable(),
   // The optional stored-session claim from a completed Claude login session. It
   // is the non-secret `storedSessionId`; it carries no token. The agent-create
@@ -114,6 +131,7 @@ export type CreateAgent = z.infer<typeof createAgentSchema>;
 
 export const builtInAgentProvisionSchema = z.object({
   adapterType: agentAdapterTypeSchema.optional(),
+  runner: z.enum(["auto", "paperclip", "legacy"]).optional(),
   adapterConfig: adapterConfigSchema.optional(),
   budgetMonthlyCents: z.number().int().nonnegative().optional(),
 }).strict();
@@ -147,8 +165,8 @@ export const updateAgentSchema = objectWithoutDefaults(
   .extend({
     permissions: z.never().optional(),
     replaceAdapterConfig: z.boolean().optional(),
-    status: z.enum(AGENT_STATUSES).optional(),
-    spentMonthlyCents: z.number().int().nonnegative().optional(),
+    status: z.enum(["paused", "idle", "terminated"]).optional(),
+    spentMonthlyCents: z.never().optional(),
   });
 
 export type UpdateAgent = z.infer<typeof updateAgentSchema>;
@@ -249,6 +267,7 @@ export const resetAgentSessionSchema = z.object({
 export type ResetAgentSession = z.infer<typeof resetAgentSessionSchema>;
 
 export const testAdapterEnvironmentSchema = z.object({
+  runner: z.enum(["auto", "paperclip", "legacy"]).optional(),
   aiConnection: aiConnectionBindingSchema.optional(),
   /** Saved agent whose redacted environment entries are restored for this probe. */
   agentId: z.string().guid().optional(),
@@ -289,3 +308,9 @@ export const updateAgentPermissionsSchema = z.object({
 });
 
 export type UpdateAgentPermissions = z.infer<typeof updateAgentPermissionsSchema>;
+
+export const resolveAgentInstructionCandidateSchema = z.object({
+  baseRevisionId: z.string().uuid().nullable(),
+  content: z.string().max(1024 * 1024),
+}).strict();
+export type ResolveAgentInstructionCandidate = z.infer<typeof resolveAgentInstructionCandidateSchema>;
