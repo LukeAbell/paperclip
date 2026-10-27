@@ -6,7 +6,7 @@ import { unprocessable } from "../errors.js";
 import { agentRecordQueries, isPlainRecord, configPatchFromApprovalPayload, normalizeRuntimeConfigForNewAgent,
   deduplicateAgentName, type CreateAgentData, type CreateAgentOptions, type AgentConfigurationPatch, type AgentHireRecord } from "../lib/agent-records.js";
 import { normalizeAgentPermissions, permissionsImplyLowTrust, NEW_STANDARD_AGENT_DEFAULT_GRANT_KEYS,
-  newStandardAgentGrantScope } from "../lib/agent-permissions.js";
+  newStandardAgentGrantScope, agentToolsUseScopeFromPermissions } from "../lib/agent-permissions.js";
 import { readBuiltInAgentMarker } from "../lib/built-in-agent-metadata.js";
 import { secretService, assertClaudeOAuthBindingInvariant } from "./secrets.js";
 import { agentCredentialService } from "./agent-credentials.js";
@@ -15,7 +15,7 @@ import { initializePrimaryAgent } from "./primary-agent.js";
 import { resolveNewAgentRunnerForCompany } from "./agent-runner-selection.js";
 
 export async function prepareAgentHire(db: Db, companyId: string, input: CreateAgentData, options?: CreateAgentOptions): Promise<CreateAgentData> {
-  const { runner, ...data } = input;
+  const { runner, toolsUseScope, ...data } = input;
   const selection = options?.runnerResolved
     ? { adapterType: data.adapterType ?? "process", adapterConfig: isPlainRecord(data.adapterConfig) ? data.adapterConfig : {} }
     : await resolveNewAgentRunnerForCompany(db, companyId, {
@@ -38,6 +38,7 @@ export async function prepareAgentHire(db: Db, companyId: string, input: CreateA
 
   const role = data.role ?? "general";
   const normalizedPermissions = normalizeAgentPermissions(data.permissions, { context: "create" });
+  if (toolsUseScope !== undefined) normalizedPermissions.toolsUseScope = toolsUseScope;
   const runtimeConfig = normalizeRuntimeConfigForNewAgent(data.runtimeConfig);
   const adapterType = data.adapterType ?? "process";
   const rawAdapterConfig = isPlainRecord(data.adapterConfig)
@@ -68,7 +69,7 @@ export async function initializeAgentHire(txDb: Db, created: AgentHireRecord, op
         principalType: "agent" as const,
         principalId: created.id,
         permissionKey,
-        scope: newStandardAgentGrantScope(permissionKey, created.id),
+        scope: newStandardAgentGrantScope(permissionKey, created.id, agentToolsUseScopeFromPermissions(created.permissions)),
       })),
     ).onConflictDoNothing();
   }
@@ -137,7 +138,7 @@ export async function completeAgentHireApproval(txDb: Db, updated: AgentHireReco
         principalType: "agent" as const,
         principalId: updated.id,
         permissionKey,
-        scope: newStandardAgentGrantScope(permissionKey, updated.id),
+        scope: newStandardAgentGrantScope(permissionKey, updated.id, agentToolsUseScopeFromPermissions(updated.permissions)),
       })),
     ).onConflictDoNothing();
   }

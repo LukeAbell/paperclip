@@ -21,7 +21,9 @@ export const NEW_STANDARD_AGENT_DEFAULT_GRANT_KEYS = [
 export function newStandardAgentGrantScope(
   permissionKey: PermissionKey,
   agentId: string,
+  toolsUseScope?: Record<string, unknown> | null,
 ): Record<string, unknown> | null {
+  if (permissionKey === "tools:use" && toolsUseScope !== undefined) return toolsUseScope;
   if (permissionKey === "tasks:assign_scope") return { subtreeRootAgentId: agentId };
   if (permissionKey === "inbox:manage") return { responsibleUserOnly: true };
   return null;
@@ -36,6 +38,18 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+export function agentToolsUseScopeFromPermissions(
+  permissions: unknown,
+): Record<string, unknown> | null | undefined {
+  if (!asRecord(permissions) || !Object.prototype.hasOwnProperty.call(permissions, "toolsUseScope")) {
+    return undefined;
+  }
+  const scope = (permissions as Record<string, unknown>).toolsUseScope;
+  return scope === null || (typeof scope === "object" && scope !== null && !Array.isArray(scope))
+    ? scope as Record<string, unknown> | null
+    : undefined;
 }
 
 /**

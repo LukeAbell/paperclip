@@ -12,6 +12,12 @@ import { trustAuthorizationPolicySchema, trustPresetSchema } from "./trust-polic
 import { agentDesiredSkillSelectionSchema } from "./adapter-skills.js";
 import { objectWithoutDefaults } from "./partial.js";
 
+export const agentToolsUseScopeSchema = z.object({
+  providerTypes: z.array(z.string().trim().min(1).max(160)).min(1).max(100),
+}).strict();
+
+export type AgentToolsUseScope = z.infer<typeof agentToolsUseScopeSchema>;
+
 export const agentPermissionsSchema = z.object({
   // No schema default: the server derives the default (enabled unless the
   // permissions record marks the agent low-trust) when the field is omitted.
@@ -100,6 +106,9 @@ export const createAgentSchema = z.object({
   defaultEnvironmentId: z.string().guid().optional().nullable(),
   budgetMonthlyCents: z.number().int().nonnegative().optional().default(0),
   permissions: agentPermissionsSchema.optional(),
+  // Optional scope for the new agent's default tools:use grant. Omitted and
+  // null retain the existing unrestricted (null-scope) default.
+  toolsUseScope: agentToolsUseScopeSchema.nullable().optional(),
   metadata: z.record(z.string(), z.unknown()).optional().nullable(),
   // The optional stored-session claim from a completed Claude login session. It
   // is the non-secret `storedSessionId`; it carries no token. The agent-create

@@ -345,6 +345,8 @@ export {
 
 export {
   createAgentSchema,
+  agentToolsUseScopeSchema,
+  type AgentToolsUseScope,
   builtInAgentEmptyMutationSchema,
   builtInAgentProvisionSchema,
   builtInAgentResetSchema,

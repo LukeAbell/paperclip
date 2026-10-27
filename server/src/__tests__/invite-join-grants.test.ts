@@ -16,6 +16,15 @@ const defaultAgentGrants = NEW_STANDARD_AGENT_DEFAULT_GRANT_KEYS.map((permission
   scope: newStandardAgentGrantScope(permissionKey, invitedAgentId),
 }));
 
+describe("new agent tools:use scope", () => {
+  it("uses an explicit scope only for tools:use and keeps null as unrestricted", () => {
+    const scope = { providerTypes: ["paperclip_self", "paperclip_plugin"] };
+    expect(newStandardAgentGrantScope("tools:use", invitedAgentId, scope)).toEqual(scope);
+    expect(newStandardAgentGrantScope("tools:use", invitedAgentId, null)).toBeNull();
+    expect(newStandardAgentGrantScope("tasks:assign_scope", invitedAgentId, scope)).toEqual({ subtreeRootAgentId: invitedAgentId });
+  });
+});
+
 describe("agentJoinGrantsFromDefaults", () => {
   it("adds all new-agent grants when invite defaults do not specify grants", () => {
     expect(agentJoinGrantsFromDefaults(null, invitedAgentId)).toEqual(defaultAgentGrants);

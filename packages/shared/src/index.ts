@@ -1902,6 +1902,8 @@ export {
   agentSkillSyncSchema,
   type AgentSkillSync,
   createAgentSchema,
+  agentToolsUseScopeSchema,
+  type AgentToolsUseScope,
   agentRuntimeConfigSchema,
   builtInAgentEmptyMutationSchema,
   builtInAgentProvisionSchema,
