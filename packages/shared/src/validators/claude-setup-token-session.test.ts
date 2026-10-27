@@ -12,6 +12,25 @@ import { createAgentSchema, createAgentHireSchema } from "./agent.js";
 
 const ENVIRONMENT_ID = "11111111-1111-4111-8111-111111111111";
 
+describe("new agent tools:use scope", () => {
+  const base = { name: "Scoped agent", adapterType: "process" as const };
+
+  it("accepts an opt-in provider scope on both create schemas", () => {
+    const scope = { providerTypes: ["paperclip_self", "paperclip_plugin"] };
+    expect(createAgentSchema.parse({ ...base, toolsUseScope: scope }).toolsUseScope).toEqual(scope);
+    expect(createAgentHireSchema.parse({ ...base, toolsUseScope: scope }).toolsUseScope).toEqual(scope);
+  });
+
+  it("keeps omitted and null scope values distinct for the server default", () => {
+    expect(createAgentHireSchema.parse(base)).not.toHaveProperty("toolsUseScope");
+    expect(createAgentHireSchema.parse({ ...base, toolsUseScope: null }).toolsUseScope).toBeNull();
+  });
+
+  it("rejects an empty provider scope", () => {
+    expect(createAgentHireSchema.safeParse({ ...base, toolsUseScope: { providerTypes: [] } }).success).toBe(false);
+  });
+});
+
 describe("claude setup-token session start request", () => {
   it("accepts a company-and-environment request with no agent id", () => {
     const parsed = startClaudeSetupTokenSessionRequestSchema.parse({
